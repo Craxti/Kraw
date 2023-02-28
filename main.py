@@ -1,110 +1,71 @@
 import requests
 import threading
-import time
-import random
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from queue import Queue
 
-# Функция отправки запросов
-def send_request(url, method, data=None, headers=None, cookies=None, verify_ssl=True, timeout=None, max_retries=1):
-    try:
-        retries = 0
-        while retries < max_retries:
+NUM_THREADS = 10  # количество потоков
+NUM_REQUESTS = 100  # количество запросов
+TIMEOUT = 5  # таймаут для запросов в секундах
+URLS_FILE = 'urls.txt'  # файл со списком URL-адресов
+PROXIES = {'http': 'http://localhost:8080', 'https': 'http://localhost:8080'}  # прокси-сервер
+HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+
+class RequestWorker(threading.Thread):
+    """Класс для работы с запросами в отдельном потоке"""
+    def __init__(self, queue, result_queue):
+        super().__init__()
+        self.queue = queue
+        self.result_queue = result_queue
+
+    def run(self):
+        while True:
+            # Получаем URL из очереди
+            url = self.queue.get()
             try:
-                if method == "GET":
-                    response = requests.get(url, headers=headers, cookies=cookies, verify=verify_ssl, timeout=timeout)
-                elif method == "POST":
-                    response = requests.post(url, data=data, headers=headers, cookies=cookies, verify=verify_ssl, timeout=timeout)
-                else:
-                    response = requests.get(url, headers=headers, cookies=cookies, verify=verify_ssl, timeout=timeout)
+                # Отправляем запрос
+                response = requests.get(url, timeout=TIMEOUT, proxies=PROXIES, headers=HEADERS)
+                # Добавляем результат в очередь результатов
+                self.result_queue.put((url, response.status_code))
+            except requests.exceptions.RequestException:
+                # Если произошла ошибка, добавляем None в очередь результатов
+                self.result_queue.put((url, None))
+            finally:
+                # Уменьшаем значение счетчика
+                self.queue.task_done()
 
-                response.raise_for_status()
-                return url, response.status_code
-            except requests.exceptions.RequestException as e:
-                retries += 1
-                if retries == max_retries:
-                    return url, str(e)
-                else:
-                    time.sleep(1)
+def stress_test():
+    # Создаем очереди для URL-адресов и результатов
+    urls_queue = Queue()
+    result_queue = Queue()
 
-# Функция для запуска потоков для отправки запросов
-def run_threads(num_threads, urls, method, data=None, headers=None, cookies=None, verify_ssl=True, timeout=None, max_retries=1):
-    # Определение максимального количества потоков для выполнения запросов
-    max_threads = min(num_threads, len(urls))
+    # Заполняем очередь URL-адресами из файла
+    with open(URLS_FILE) as f:
+        urls = f.read().splitlines()
+    for url in urls:
+        urls_queue.put(url)
 
-    # Создание пула потоков для отправки запросов
-    with ThreadPoolExecutor(max_workers=max_threads) as executor:
-        futures = []
+    # Запускаем потоки-работники
+    for i in range(NUM_THREADS):
+        t = RequestWorker(urls_queue, result_queue)
+        t.daemon = True
+        t.start()
 
-        # Запуск потоков для отправки запросов
-        for url in urls:
-            future = executor.submit(send_request, url, method, data, headers, cookies, verify_ssl, timeout, max_retries)
-            futures.append(future)
+    # Ждем, пока все URL будут обработаны
+    urls_queue.join()
 
-        # Ожидание завершения всех потоков и сбор результатов
-        results = []
-        for future in as_completed(futures):
-            results.append(future.result())
+    # Получаем результаты из очереди результатов
+    results = []
+    while not result_queue.empty():
+        results.append(result_queue.get())
 
-    return results
+    # Сортируем результаты по URL-адресам
+    results = sorted(results, key=lambda x: x[0])
 
-# Функция для выполнения стресс-теста веб-сервиса
-def stress_test(url, num_requests=100, method="GET", num_threads=32, data=None, headers=None, cookies=None, verify_ssl=True, timeout=None, max_retries=1, delay=None, random_delay=False):
-    # Создание списка URL для отправки запросов
-    urls = [url] * num_requests
-
-    # Добавление задержки между запросами (если указана)
-    if delay is not None:
-        if random_delay:
-            delays = [random.uniform(delay[0], delay[1]) for i in range(num_requests)]
+    # Выводим результаты
+    for url, status_code in results:
+        if status_code is None:
+            print(f"{url}: Request failed")
         else:
-            delays = [delay] * num_requests
-        time.sleep(delay)
+            print(f"{url}: Status code {status_code}")
 
-   # Запуск потоков для отправки запросов
-start_time = time.time()
-results = run_threads(num_threads, urls, method, data, headers, cookies, verify_ssl, timeout, max_retries)
-end_time = time.time()
-
-# Время выполнения теста
-total_time = end_time - start_time
-
-# Вывод результатов теста
-num_success = 0
-num_errors = 0
-error_codes = {}
-for result in results:
-    url, status_code = result
-    if isinstance(status_code, int):
-        num_success += 1
-    else:
-        num_errors += 1
-        if status_code in error_codes:
-            error_codes[status_code] += 1
-        else:
-            error_codes[status_code] = 1
-
-print(f"Stress test results for {url}:")
-print(f"Total requests: {num_requests}")
-print(f"Successful requests: {num_success}")
-print(f"Failed requests: {num_errors}")
-print(f"Total time: {total_time:.2f} seconds")
-
-if num_errors > 0:
-    print("Error codes:")
-    for code, count in error_codes.items():
-        print(f"{code}: {count}")
-        
-        
-def generate_random_url():
-    protocols = ["http", "https"]
-    tlds = ["com", "net", "org", "info", "biz", "ru", "io", "app"]
-    words = ["apple", "banana", "cherry", "date", "elderberry", "fig", "grape", "honeydew", "kiwi", "lemon", "mango", "nectarine", "orange", "peach", "quince", "raspberry", "strawberry", "tangerine", "watermelon"]
-    protocol = random.choice(protocols)
-     domain = f"{random.choice(words)}.{random.choice(tlds)}"
-    return f"{protocol}://{domain}"
-
-if name == "main":
-    # Генерация случайных URL-адресов для тестирования
-    urls = [generate_random_url() for i in range(100)] 
-    # Выполнение стресс-теста
-    stress_test(url=urls[0], num_requests=1000, num_threads=64)
+if __name__ == '__main__':
+    stress_test()
