@@ -92,3 +92,7 @@ if __name__ == '__main__':
             print(f"{url}: Request failed")
         else:
             print(f"{url}: Status code {status_code}")
+    
+    output_file = 'results.csv'
+    stress_test(output_file)
+    print(f'Results saved to {output_file}')
