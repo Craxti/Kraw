@@ -2,6 +2,7 @@ import requests
 import threading
 import queue
 from typing import List, Tuple
+import cvs
 
 NUM_THREADS = 10  # количество потоков
 NUM_REQUESTS = 100  # количество запросов
@@ -34,18 +35,22 @@ class RequestWorker(threading.Thread):
                 # Уменьшаем значение счетчика
                 self.queue.task_done()
 
-def stress_test(urls: List[str], num_threads: int = NUM_THREADS) -> List[Tuple[str, int]]:
-    # Создаем очереди для URL-адресов и результатов
-    urls_queue = queue.Queue()
-    result_queue = queue.Queue()
+import csv
 
-    # Заполняем очередь URL-адресами из списка
+def stress_test(output_file):
+    # Создаем очереди для URL-адресов и результатов
+    urls_queue = Queue()
+    result_queue = Queue()
+
+    # Заполняем очередь URL-адресами из файла
+    with open(URLS_FILE) as f:
+        urls = f.read().splitlines()
     for url in urls:
         urls_queue.put(url)
 
     # Запускаем потоки-работники
-    for i in range(num_threads):
-        t = RequestWorker(urls_queue, result_queue, headers=HEADERS)
+    for i in range(NUM_THREADS):
+        t = RequestWorker(urls_queue, result_queue)
         t.daemon = True
         t.start()
 
@@ -60,7 +65,18 @@ def stress_test(urls: List[str], num_threads: int = NUM_THREADS) -> List[Tuple[s
     # Сортируем результаты по URL-адресам
     results = sorted(results, key=lambda x: x[0])
 
-    return results
+    # Выводим результаты в консоль и записываем в файл
+    with open(output_file, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['URL', 'Status Code'])
+        for url, status_code in results:
+            if status_code is None:
+                print(f"{url}: Request failed")
+                writer.writerow([url, 'Request failed'])
+            else:
+                print(f"{url}: Status code {status_code}")
+                writer.writerow([url, status_code])
+
 
 if __name__ == '__main__':
     # Читаем URL-адреса из файла
