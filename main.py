@@ -2,7 +2,7 @@ import requests
 import threading
 import queue
 from typing import List, Tuple
-import cvs
+import csv
 
 NUM_THREADS = 10  # количество потоков
 NUM_REQUESTS = 100  # количество запросов
