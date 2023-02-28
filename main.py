@@ -3,6 +3,17 @@ import concurrent.futures
 import requests
 import time
 import statistics
+import logging
+
+def setup_logger():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler("test.log"),
+            logging.StreamHandler()
+        ]
+    )
 
 def send_request(session, url):
     try:
@@ -15,14 +26,14 @@ def print_stats(num_requests, success_set, failure_set, elapsed_time):
     num_success = len(success_set)
     num_failure = len(failure_set)
     success_rate = num_success / num_requests * 100
-    print(f"\nElapsed time: {elapsed_time:.2f} seconds")
-    print(f"Total requests: {num_requests}")
-    print(f"Successful requests: {num_success} ({success_rate:.2f}%)")
-    print(f"Failed requests: {num_failure} ({100 - success_rate:.2f}%)")
+    logging.info(f"\nElapsed time: {elapsed_time:.2f} seconds")
+    logging.info(f"Total requests: {num_requests}")
+    logging.info(f"Successful requests: {num_success} ({success_rate:.2f}%)")
+    logging.info(f"Failed requests: {num_failure} ({100 - success_rate:.2f}%)")
     if num_success > 0:
-        print(f"Fastest time: {min(success_set):.2f} seconds")
-        print(f"Slowest time: {max(success_set):.2f} seconds")
-        print(f"Average time: {statistics.mean(success_set):.2f} seconds")
+        logging.info(f"Fastest time: {min(success_set):.2f} seconds")
+        logging.info(f"Slowest time: {max(success_set):.2f} seconds")
+        logging.info(f"Average time: {statistics.mean(success_set):.2f} seconds")
 
 def run_test(url, num_requests, num_threads, test_time):
     session = requests.Session()
@@ -57,4 +68,8 @@ if __name__ == "__main__":
     parser.add_argument('--time', '-s', type=int, default=60, help='Duration of the test in seconds')
     args = parser.parse_args()
 
+    setup_logger()
+    logging.info(f"Starting stress test for {args.url}")
+    logging.info(f"Sending {args.requests} requests with {args.threads} threads for {args.time} seconds")
     run_test(args.url, args.requests, args.threads, args.time)
+    logging.info("Stress test complete")
