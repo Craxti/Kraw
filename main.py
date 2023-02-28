@@ -3,6 +3,7 @@ import threading
 import queue
 from typing import List, Tuple
 import csv
+import validators
 
 NUM_THREADS = 10  # количество потоков
 NUM_REQUESTS = 100  # количество запросов
@@ -24,13 +25,16 @@ class RequestWorker(threading.Thread):
             # Получаем URL из очереди
             url = self.queue.get()
             try:
+                # Проверяем формат URL-адреса
+                if not validators.url(url):
+                    raise ValueError(f"Invalid URL format: {url}")
                 # Отправляем запрос
-                response = requests.get(url, timeout=TIMEOUT, proxies=PROXIES, headers=self.headers)
+                response = requests.get(url, timeout=TIMEOUT, proxies=PROXIES, headers=HEADERS)
                 # Добавляем результат в очередь результатов
                 self.result_queue.put((url, response.status_code))
-            except requests.exceptions.RequestException:
+            except (requests.exceptions.RequestException, ValueError) as e:
                 # Если произошла ошибка, добавляем None в очередь результатов
-                self.result_queue.put((url, None))
+                self.result_queue.put((url, None, str(e)))
             finally:
                 # Уменьшаем значение счетчика
                 self.queue.task_done()
