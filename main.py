@@ -7,6 +7,20 @@ import logging
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
+# Начало улучшений
+
+DEFAULT_TIMEOUT = 5  # 5 секунд
+
+def send_request(session, url, timeout):
+    try:
+        response = session.get(url, timeout=timeout)
+        return response.status_code
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Request failed for URL: {url}. Exception: {e}")
+        return None
+
+# Конец улучшений
+
 def setup_logger():
     logging.basicConfig(
         level=logging.INFO,
@@ -16,13 +30,6 @@ def setup_logger():
             logging.StreamHandler()
         ]
     )
-
-def send_request(session, url):
-    try:
-        response = session.get(url)
-        return response.status_code
-    except requests.exceptions.RequestException:
-        return None
 
 def print_stats(num_requests, success_set, failure_set, elapsed_time):
     num_success = len(success_set)
@@ -45,7 +52,7 @@ def plot_results(success_set, failure_set):
     plt.axis('equal')
     plt.show()
 
-def run_test(url, num_requests, num_threads, test_time, plot=False):
+def run_test(url, num_requests, num_threads, test_time, timeout, plot=False):
     session = requests.Session()
     session.headers.update({'User-Agent': 'Mozilla/5.0'})
     results_queue = concurrent.futures.Queue()
@@ -55,7 +62,7 @@ def run_test(url, num_requests, num_threads, test_time, plot=False):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
         for i in range(num_requests):
-            executor.submit(send_request, session, url, results_queue)
+            executor.submit(send_request, session, url, timeout, results_queue)
 
         progress_bar = tqdm(total=num_requests * num_threads)
         while time.monotonic() - start_time < test_time:
