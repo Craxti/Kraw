@@ -1,99 +1,102 @@
-import argparse
-import concurrent.futures
 import requests
+from bs4 import BeautifulSoup
 import time
-import statistics
-import logging
-import matplotlib.pyplot as plt
-from tqdm import tqdm
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
+import pymongo
+import re
+from urllib.robotparser import RobotFileParser
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+import asyncio
+import aiohttp
 
-# Начало улучшений
+visited_pages = []
 
-DEFAULT_TIMEOUT = 5  # 5 секунд
+def get_robots_txt(url):
+    rp = RobotFileParser()
+    rp.set_url(f"{url}/robots.txt")
+    rp.read()
+    return rp
 
-def send_request(session, url, timeout):
+def is_allowed(url, rp):
+    return rp.can_fetch("*", url)
+
+async def fetch_url(session, url):
+    async with session.get(url) as response:
+        try:
+            content_type = response.headers['Content-Type']
+            if content_type.startswith('text/html'):
+                html = await response.text()
+                return url, html
+        except:
+            pass
+    return None, None
+
+async def process_links(loop, db, rp, links):
+    async with aiohttp.ClientSession(loop=loop) as session:
+        tasks = []
+        for link in links:
+            url = link['href']
+            if url.startswith('http') and urlparse(url).netloc != "":
+                task = loop.create_task(fetch_url(session, url))
+                tasks.append(task)
+        for task in as_completed(tasks):
+            url, html = await task
+            if url and html:
+                data = {"url": url, "html": html}
+                db.pages.insert_one(data)
+
+def crawl(url, depth, max_pages, db, rp):
+    # Проверяем, была ли эта страница посещена ранее или достигнута максимальная глубина
+    if url in visited_pages or depth == 0 or len(visited_pages) == max_pages:
+        return
+    # Проверяем, разрешено ли посещение страницы
+    if not is_allowed(url, rp):
+        print(f"Запрещено посещение страницы: {url}")
+        return
+    # Добавляем страницу в список посещенных
+    visited_pages.append(url)
+    # Отправляем GET-запрос на URL
     try:
-        response = session.get(url, timeout=timeout)
-        return response.status_code
+        response = requests.get(url, timeout=5)
     except requests.exceptions.RequestException as e:
-        logging.error(f"Request failed for URL: {url}. Exception: {e}")
-        return None
-
-# Конец улучшений
-
-def setup_logger():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.FileHandler("test.log"),
-            logging.StreamHandler()
-        ]
-    )
-
-def print_stats(num_requests, success_set, failure_set, elapsed_time):
-    num_success = len(success_set)
-    num_failure = len(failure_set)
-    success_rate = num_success / num_requests * 100
-    logging.info(f"\nElapsed time: {elapsed_time:.2f} seconds")
-    logging.info(f"Total requests: {num_requests}")
-    logging.info(f"Successful requests: {num_success} ({success_rate:.2f}%)")
-    logging.info(f"Failed requests: {num_failure} ({100 - success_rate:.2f}%)")
-    if num_success > 0:
-        logging.info(f"Fastest time: {min(success_set):.2f} seconds")
-        logging.info(f"Slowest time: {max(success_set):.2f} seconds")
-        logging.info(f"Average time: {statistics.mean(success_set):.2f} seconds")
-
-def plot_results(success_set, failure_set):
-    labels = ['Success', 'Failure']
-    sizes = [len(success_set), len(failure_set)]
-    colors = ['#00ff00', '#ff0000']
-    plt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
-    plt.axis('equal')
-    plt.show()
-
-def run_test(url, num_requests, num_threads, test_time, timeout, plot=False):
-    session = requests.Session()
-    session.headers.update({'User-Agent': 'Mozilla/5.0'})
-    results_queue = concurrent.futures.Queue()
-    success_set = set()
-    failure_set = set()
-    start_time = time.monotonic()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-        for i in range(num_requests):
-            executor.submit(send_request, session, url, timeout, results_queue)
-
-        progress_bar = tqdm(total=num_requests * num_threads)
-        while time.monotonic() - start_time < test_time:
-            try:
-                result = results_queue.get(timeout=1)
-                progress_bar.update(1)
-                if result:
-                    success_set.add(result)
-                else:
-                    failure_set.add(result)
-            except concurrent.futures.TimeoutError:
-                pass
-
-        progress_bar.close()
-
-    elapsed_time = time.monotonic() - start_time
-    print_stats(num_requests * num_threads, success_set, failure_set, elapsed_time)
-
-    if plot:
-        plot_results(success_set, failure_set)
+        print(f"Ошибка: {e}")
+        return
+    # Используем BeautifulSoup для извлечения ссылок на странице
+    soup = BeautifulSoup(response.content, "html.parser")
+    links = soup.find_all("a", href=True)
+    # Обрабатываем ссылки асинхронно
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(process_links(loop, db, rp, links))
+    loop.close()
+    # Снижаем глубину на 1 и рекурсивно обрабатываем каждую ссылку
+    for link in links:
+        href = link.get("href")
+        if href.startswith("http"):
+            crawl(href, depth - 1, max_pages, db, rp)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Website stress testing tool')
-    parser.add_argument('url', type=str, help='URL of the website to test')
-    parser.add_argument('--requests', '-r', type=int, default=1000, help='Number of requests to send')
-    parser.add_argument('--threads', '-t', type=int, default=10, help='Number of threads to use')
-    parser.add_argument('--time', '-s', type=int, default=60, help='Duration of the test in seconds')
+    parser = argparse.ArgumentParser(description="Web crawler")
+    parser.add_argument("url", help="Starting URL")
+    parser.add_argument("-d", "--depth", type=int, default=2, help="Crawl depth")
+    parser.add_argument("-p", "--max_pages", type=int, default=10, help="Maximum number of pages to crawl")
+    parser.add_argument("-c", "--concurrency", type=int, default=10, help="Number of concurrent requests")
     args = parser.parse_args()
 
-    setup_logger()
-    logging.info(f"Starting stress test for {args.url}")
-    logging.info(f"Sending {args.requests} requests with {args.threads} threads for {args.time} seconds")
-    run_test(args.url, args.requests, args.threads, args.time)
-    logging.info("Stress test complete")
+    # Инициализируем базу данных MongoDB
+    client = pymongo.MongoClient("mongodb://localhost:27017/")
+    db = client["crawler"]
+    db.pages.drop()
+    db.pages.create_index("url", unique=True)
+
+    # Получаем robots.txt для начального URL
+    rp = get_robots_txt(args.url)
+
+    # Запускаем краулер
+    crawl(args.url, args.depth, args.max_pages, db, rp)
+
+# Выводим результаты
+print(f"Visited {len(visited_pages)} pages")
