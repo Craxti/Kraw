@@ -14,32 +14,36 @@ import aiohttp
 
 visited_pages = []
 
+
 def get_robots_txt(url):
     rp = RobotFileParser()
     rp.set_url(f"{url}/robots.txt")
     rp.read()
     return rp
 
+
 def is_allowed(url, rp):
     return rp.can_fetch("*", url)
+
 
 async def fetch_url(session, url):
     async with session.get(url) as response:
         try:
-            content_type = response.headers['Content-Type']
-            if content_type.startswith('text/html'):
+            content_type = response.headers["Content-Type"]
+            if content_type.startswith("text/html"):
                 html = await response.text()
                 return url, html
         except:
             pass
     return None, None
 
+
 async def process_links(loop, db, rp, links):
     async with aiohttp.ClientSession(loop=loop) as session:
         tasks = []
         for link in links:
-            url = link['href']
-            if url.startswith('http') and urlparse(url).netloc != "":
+            url = link["href"]
+            if url.startswith("http") and urlparse(url).netloc != "":
                 task = loop.create_task(fetch_url(session, url))
                 tasks.append(task)
         for task in as_completed(tasks):
@@ -47,6 +51,7 @@ async def process_links(loop, db, rp, links):
             if url and html:
                 data = {"url": url, "html": html}
                 db.pages.insert_one(data)
+
 
 def crawl(url, depth, max_pages, db, rp):
     # Проверяем, была ли эта страница посещена ранее или достигнута максимальная глубина
@@ -78,12 +83,25 @@ def crawl(url, depth, max_pages, db, rp):
         if href.startswith("http"):
             crawl(href, depth - 1, max_pages, db, rp)
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Web crawler")
     parser.add_argument("url", help="Starting URL")
     parser.add_argument("-d", "--depth", type=int, default=2, help="Crawl depth")
-    parser.add_argument("-p", "--max_pages", type=int, default=10, help="Maximum number of pages to crawl")
-    parser.add_argument("-c", "--concurrency", type=int, default=10, help="Number of concurrent requests")
+    parser.add_argument(
+        "-p",
+        "--max_pages",
+        type=int,
+        default=10,
+        help="Maximum number of pages to crawl",
+    )
+    parser.add_argument(
+        "-c",
+        "--concurrency",
+        type=int,
+        default=10,
+        help="Number of concurrent requests",
+    )
     args = parser.parse_args()
 
     # Инициализируем базу данных MongoDB
